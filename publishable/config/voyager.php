@@ -13,8 +13,13 @@ return [
     'user' => [
         'add_default_role_on_register' => true,
         'default_role'                 => 'user',
-        'namespace'                    => App\User::class,
+        // Set `namespace` to `null` to use `config('auth.providers.users.model')` value
+        // Set `namespace` to a class to override auth user model.
+        // However make sure the appointed class must ready to use before installing voyager.
+        // Otherwise `php artisan voyager:install` will fail with class not found error.
+        'namespace'                    => null,
         'default_avatar'               => 'users/default.png',
+        'redirect'                     => '/admin',
     ],
 
     /*
@@ -91,7 +96,7 @@ return [
 
     'database' => [
         'tables' => [
-            'hidden' => ['migrations', 'data_rows', 'data_types', 'menu_items', 'password_resets', 'permission_role', 'permissions', 'settings'],
+            'hidden' => ['migrations', 'data_rows', 'data_types', 'menu_items', 'password_resets', 'permission_role', 'settings'],
         ],
     ],
 
@@ -112,6 +117,11 @@ return [
         'enabled' => false,
 
         /*
+         * Set whether or not the admin layout default is RTL.
+         */
+        'rtl' => false,
+
+        /*
          * Select default language
          */
         'default' => 'en',
@@ -122,39 +132,6 @@ return [
         'locales' => [
             'en',
             //'pt',
-        ],
-    ],
-
-    /*
-    |--------------------------------------------------------------------------
-    | Widgets Config
-    |--------------------------------------------------------------------------
-    |
-    | Here you can specify voyager administration settings
-    |
-    */
-
-    'widgets' => [
-        [
-            'name'  => 'User',
-            'icon'  => 'voyager-group',
-            'model' => TCG\Voyager\Models\User::class,
-            'url'   => 'admin/users',
-            'image' => '/images/widget-backgrounds/02.png',
-        ],
-        [
-            'name'  => 'Post',
-            'icon'  => 'voyager-news',
-            'model' => TCG\Voyager\Models\Post::class,
-            'url'   => 'admin/posts',
-            'image' => '/images/widget-backgrounds/03.png',
-        ],
-        [
-            'name'  => 'Page',
-            'icon'  => 'voyager-file-text',
-            'model' => TCG\Voyager\Models\Page::class,
-            'url'   => 'admin/pages',
-            'image' => '/images/widget-backgrounds/04.png',
         ],
     ],
 
@@ -171,14 +148,14 @@ return [
         // Add custom list items to navbar's dropdown
         'navbar_items' => [
             'Profile' => [
-                'route'         => 'voyager.profile',
-                'classes'       => 'class-full-of-rum',
-                'icon_class'    => 'voyager-person',
+                'route'      => 'voyager.profile',
+                'classes'    => 'class-full-of-rum',
+                'icon_class' => 'voyager-person',
             ],
             'Home' => [
-                'route'         => '/',
-                'icon_class'    => 'voyager-home',
-                'target_blank'  => true,
+                'route'        => '/',
+                'icon_class'   => 'voyager-home',
+                'target_blank' => true,
             ],
             'Logout' => [
                 'route'      => 'voyager.logout',
@@ -186,16 +163,33 @@ return [
             ],
         ],
 
-        'data_tables' => [
-            'responsive' => true, // Use responsive extension for jQuery dataTables that are not server-side paginated
-        ],
-
         'widgets' => [
-            'TCG\\Voyager\\Widgets\\UserDimmer',
-            'TCG\\Voyager\\Widgets\\PostDimmer',
-            'TCG\\Voyager\\Widgets\\PageDimmer',
+
         ],
 
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Automatic Procedures
+    |--------------------------------------------------------------------------
+    |
+    | When a change happens on Voyager, we can automate some routines.
+    |
+    */
+
+    'bread' => [
+        // When a BREAD is added, create the Menu item using the BREAD properties.
+        'add_menu_item' => true,
+
+        // which menu add item to
+        'default_menu' => 'admin',
+
+        // When a BREAD is added, create the related Permission.
+        'add_permission' => true,
+
+        // which role add premissions to
+        'default_role' => 'admin',
     ],
 
     /*
@@ -205,17 +199,28 @@ return [
     |
     | Here you change some of the Voyager UI settings.
     |
-    | TODO: Move style properties to assets/css
-    |
     */
-
-    'login' => [
-        'gradient_a' => '#ffffff',
-        'gradient_b' => '#ffffff',
-    ],
 
     'primary_color' => '#22A7F0',
 
     'show_dev_tips' => true, // Show development tip "How To Use:" in Menu and Settings
+
+    // Here you can specify additional assets you would like to be included in the master.blade
+    'additional_css' => [
+        //'css/custom.css',
+    ],
+
+    'additional_js' => [
+        //'js/custom.js',
+    ],
+
+    'googlemaps' => [
+         'key'    => env('GOOGLE_MAPS_KEY', ''),
+         'center' => [
+             'lat' => env('GOOGLE_MAPS_DEFAULT_CENTER_LAT', '32.715738'),
+             'lng' => env('GOOGLE_MAPS_DEFAULT_CENTER_LNG', '-117.161084'),
+         ],
+         'zoom' => env('GOOGLE_MAPS_DEFAULT_ZOOM', 11),
+     ],
 
 ];

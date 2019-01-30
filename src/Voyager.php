@@ -2,11 +2,17 @@
 
 namespace TCG\Voyager;
 
+use Arrilot\Widgets\Facade as Widget;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Filesystem\Filesystem;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Storage;
-use Symfony\Component\HttpKernel\Exception\UnauthorizedHttpException;
+use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
+use TCG\Voyager\Actions\DeleteAction;
+use TCG\Voyager\Actions\EditAction;
+use TCG\Voyager\Actions\ViewAction;
+use TCG\Voyager\Events\AlertsCollection;
 use TCG\Voyager\FormFields\After\HandlerInterface as AfterHandlerInterface;
 use TCG\Voyager\FormFields\HandlerInterface;
 use TCG\Voyager\Models\Category;
@@ -19,6 +25,7 @@ use TCG\Voyager\Models\Permission;
 use TCG\Voyager\Models\Post;
 use TCG\Voyager\Models\Role;
 use TCG\Voyager\Models\Setting;
+use TCG\Voyager\Models\Translation;
 use TCG\Voyager\Models\User;
 use TCG\Voyager\Traits\Translatable;
 
@@ -38,19 +45,30 @@ class Voyager
 
     protected $users = [];
 
-    protected $models = [
-        'Category'   => Category::class,
-        'DataRow'    => DataRow::class,
-        'DataType'   => DataType::class,
-        'Menu'       => Menu::class,
-        'MenuItem'   => MenuItem::class,
-        'Page'       => Page::class,
-        'Permission' => Permission::class,
-        'Post'       => Post::class,
-        'Role'       => Role::class,
-        'Setting'    => Setting::class,
-        'User'       => User::class,
+    protected $viewLoadingEvents = [];
+
+    protected $actions = [
+        DeleteAction::class,
+        EditAction::class,
+        ViewAction::class,
     ];
+
+    protected $models = [
+        'Category'    => Category::class,
+        'DataRow'     => DataRow::class,
+        'DataType'    => DataType::class,
+        'Menu'        => Menu::class,
+        'MenuItem'    => MenuItem::class,
+        'Page'        => Page::class,
+        'Permission'  => Permission::class,
+        'Post'        => Post::class,
+        'Role'        => Role::class,
+        'Setting'     => Setting::class,
+        'User'        => User::class,
+        'Translation' => Translation::class,
+    ];
+
+    public $setting_cache = null;
 
     public function __construct()
     {
@@ -86,19 +104,35 @@ class Voyager
         return $this;
     }
 
-    public function formField($row, $dateType, $dataTypeContent)
+    public function view($name, array $parameters = [])
+    {
+        foreach (array_get($this->viewLoadingEvents, $name, []) as $event) {
+            $event($name, $parameters);
+        }
+
+        return view($name, $parameters);
+    }
+
+    public function onLoadingView($name, \Closure $closure)
+    {
+        if (!isset($this->viewLoadingEvents[$name])) {
+            $this->viewLoadingEvents[$name] = [];
+        }
+
+        $this->viewLoadingEvents[$name][] = $closure;
+    }
+
+    public function formField($row, $dataType, $dataTypeContent)
     {
         $formField = $this->formFields[$row->type];
 
-        return $formField->handle($row, $dateType, $dataTypeContent);
+        return $formField->handle($row, $dataType, $dataTypeContent);
     }
 
     public function afterFormFields($row, $dataType, $dataTypeContent)
     {
-        $options = json_decode($row->details);
-
-        return collect($this->afterFormFields)->filter(function ($after) use ($row, $dataType, $dataTypeContent, $options) {
-            return $after->visible($row, $dataType, $dataTypeContent, $options);
+        return collect($this->afterFormFields)->filter(function ($after) use ($row, $dataType, $dataTypeContent) {
+            return $after->visible($row, $dataType, $dataTypeContent, $row->details);
         });
     }
 
@@ -134,21 +168,65 @@ class Voyager
         });
     }
 
-    public function setting($key, $default = null)
+    public function addAction($action)
     {
-        $setting = Setting::where('key', '=', $key)->first();
+        array_push($this->actions, $action);
+    }
 
-        if (isset($setting->id)) {
-            return $setting->value;
+    public function replaceAction($actionToReplace, $action)
+    {
+        $key = array_search($actionToReplace, $this->actions);
+        $this->actions[$key] = $action;
+    }
+
+    public function actions()
+    {
+        return $this->actions;
+    }
+
+    /**
+     * Get a collection of the dashboard widgets.
+     *
+     * @return \Arrilot\Widgets\WidgetGroup
+     */
+    public function dimmers()
+    {
+        $widgetClasses = config('voyager.dashboard.widgets');
+        $dimmers = Widget::group('voyager::dimmers');
+
+        foreach ($widgetClasses as $widgetClass) {
+            $widget = app($widgetClass);
+
+            if ($widget->shouldBeDisplayed()) {
+                $dimmers->addWidget($widgetClass);
+            }
         }
 
-        return $default;
+        return $dimmers;
+    }
+
+    public function setting($key, $default = null)
+    {
+        if ($this->setting_cache === null) {
+            foreach (self::model('Setting')->all() as $setting) {
+                $keys = explode('.', $setting->key);
+                @$this->setting_cache[$keys[0]][$keys[1]] = $setting->value;
+            }
+        }
+
+        $parts = explode('.', $key);
+
+        if (count($parts) == 2) {
+            return @$this->setting_cache[$parts[0]][$parts[1]] ?: $default;
+        } else {
+            return @$this->setting_cache[$parts[0]] ?: $default;
+        }
     }
 
     public function image($file, $default = '')
     {
-        if (!empty($file) && Storage::disk(config('voyager.storage.disk'))->exists($file)) {
-            return Storage::disk(config('voyager.storage.disk'))->url($file);
+        if (!empty($file)) {
+            return str_replace('\\', '/', Storage::disk(config('voyager.storage.disk'))->url($file));
         }
 
         return $default;
@@ -159,6 +237,7 @@ class Voyager
         require __DIR__.'/../routes/voyager.php';
     }
 
+    /** @deprecated */
     public function can($permission)
     {
         $this->loadPermissions();
@@ -166,27 +245,30 @@ class Voyager
         // Check if permission exist
         $exist = $this->permissions->where('key', $permission)->first();
 
-        if ($exist) {
-            $user = $this->getUser();
-            if ($user == null || !$user->hasPermission($permission)) {
-                return false;
-            }
+        // Permission not found
+        if (!$exist) {
+            throw new \Exception('Permission does not exist', 400);
+        }
 
-            return true;
+        $user = $this->getUser();
+        if ($user == null || !$user->hasPermission($permission)) {
+            return false;
         }
 
         return true;
     }
 
+    /** @deprecated */
     public function canOrFail($permission)
     {
         if (!$this->can($permission)) {
-            throw new UnauthorizedHttpException(null);
+            throw new AccessDeniedHttpException();
         }
 
         return true;
     }
 
+    /** @deprecated */
     public function canOrAbort($permission, $statusCode = 403)
     {
         if (!$this->can($permission)) {
@@ -209,7 +291,7 @@ class Voyager
     public function alerts()
     {
         if (!$this->alertsCollected) {
-            event('voyager.alerts.collecting');
+            event(new AlertsCollection($this->alerts));
 
             $this->alertsCollected = true;
         }
@@ -267,12 +349,13 @@ class Voyager
         return in_array(Translatable::class, $traits);
     }
 
+    /** @deprecated */
     protected function loadPermissions()
     {
         if (!$this->permissionsLoaded) {
             $this->permissionsLoaded = true;
 
-            $this->permissions = Permission::all();
+            $this->permissions = self::model('Permission')->all();
         }
     }
 
@@ -287,9 +370,14 @@ class Voyager
         }
 
         if (!isset($this->users[$id])) {
-            $this->users[$id] = User::find($id);
+            $this->users[$id] = self::model('User')->find($id);
         }
 
         return $this->users[$id];
+    }
+
+    public function getLocales()
+    {
+        return array_diff(scandir(realpath(__DIR__.'/../publishable/lang')), ['..', '.']);
     }
 }

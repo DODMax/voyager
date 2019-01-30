@@ -2,9 +2,10 @@
 
 namespace TCG\Voyager\Traits;
 
+use Exception;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\Relation;
-use TCG\Voyager\Models\Translation;
+use TCG\Voyager\Facades\Voyager;
 use TCG\Voyager\Translator;
 
 trait Translatable
@@ -30,7 +31,7 @@ trait Translatable
      */
     public function translations()
     {
-        return $this->hasMany(Translation::class, 'foreign_key', $this->getKeyName())
+        return $this->hasMany(Voyager::model('Translation'), 'foreign_key', $this->getKeyName())
             ->where('table_name', $this->getTable())
             ->whereIn('locale', config('voyager.multilingual.locales', []));
     }
@@ -54,11 +55,13 @@ trait Translatable
         }
 
         $query->with(['translations' => function (Relation $query) use ($locale, $fallback) {
-            $query->where('locale', $locale);
+            $query->where(function ($q) use ($locale, $fallback) {
+                $q->where('locale', $locale);
 
-            if ($fallback !== false) {
-                $query->orWhere('locale', $fallback);
-            }
+                if ($fallback !== false) {
+                    $q->orWhere('locale', $fallback);
+                }
+            });
         }]);
     }
 
@@ -85,15 +88,17 @@ trait Translatable
                 return;
             }
 
-            if (is_array($locales)) {
-                $query->whereIn('locale', $locales);
-            } else {
-                $query->where('locale', $locales);
-            }
+            $query->where(function ($q) use ($locales, $fallback) {
+                if (is_array($locales)) {
+                    $q->whereIn('locale', $locales);
+                } else {
+                    $q->where('locale', $locales);
+                }
 
-            if ($fallback !== false) {
-                $query->orWhere('locale', $fallback);
-            }
+                if ($fallback !== false) {
+                    $q->orWhere('locale', $fallback);
+                }
+            });
         }]);
     }
 
@@ -107,7 +112,7 @@ trait Translatable
      */
     public function translate($language = null, $fallback = true)
     {
-        if ($this->relationLoaded('translations')) {
+        if (!$this->relationLoaded('translations')) {
             $this->load('translations');
         }
 
@@ -297,6 +302,10 @@ trait Translatable
         $transFields = $this->getTranslatableAttributes();
 
         foreach ($transFields as $field) {
+            if (!$request->input($field.'_i18n')) {
+                throw new Exception('Invalid Translatable field'.$field);
+            }
+
             $trans = json_decode($request->input($field.'_i18n'), true);
 
             // Set the default local value
